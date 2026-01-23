@@ -155,6 +155,15 @@ func GetAllChannels() ([]*Channel, error) {
 	return channels, err
 }
 
+func GetAllDisabledChannels() ([]*Channel, error) {
+	var channels []*Channel
+	err := DB.Where("status = ? or status = ?",
+		config.ChannelStatusAutoDisabled,
+		config.ChannelStatusManuallyDisabled).
+		Order("id desc").Find(&channels).Error
+	return channels, err
+}
+
 func GetChannelById(id int) (*Channel, error) {
 	channel := Channel{Id: id}
 	err := DB.First(&channel, "id = ?", id).Error

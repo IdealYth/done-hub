@@ -336,6 +336,83 @@ func TestAllChannels(c *gin.Context) {
 	})
 }
 
+var testAllDisabledChannelsLock sync.Mutex
+var testAllDisabledChannelsRunning = false
+
+func testAllDisabledChannels(isNotify bool) error {
+	testAllDisabledChannelsLock.Lock()
+	if testAllDisabledChannelsRunning {
+		testAllDisabledChannelsLock.Unlock()
+		return errors.New("测试已在运行中")
+	}
+	testAllDisabledChannelsRunning = true
+	testAllDisabledChannelsLock.Unlock()
+	channels, err := model.GetAllDisabledChannels()
+	if err != nil {
+		return err
+	}
+	var disableThreshold = int64(config.ChannelDisableThreshold * 1000)
+	if disableThreshold == 0 {
+		disableThreshold = 10000000 // a impossible value
+	}
+	go func() {
+		var sb strings.Builder
+		for _, channel := range channels {
+			time.Sleep(config.RequestInterval)
+
+			sb.WriteString(fmt.Sprintf("**通道 %s - #%d - %s** : \n\n", utils.EscapeMarkdownText(channel.Name), channel.Id, channel.StatusToStr()))
+			tik := time.Now()
+			openaiErr, err := testChannel(channel, "")
+			tok := time.Now()
+			milliseconds := tok.Sub(tik).Milliseconds()
+
+			if err != nil {
+				sb.WriteString(fmt.Sprintf("- 测试报错: %s \n\n", utils.EscapeMarkdownText(err.Error())))
+				continue
+			}
+			if milliseconds > disableThreshold {
+				sb.WriteString(fmt.Sprintf("- 响应时间 %.2fs 超过阈值 %.2fs \n\n- 保持禁用状态\n\n", float64(milliseconds)/1000.0, float64(disableThreshold)/1000.0))
+				continue
+			}
+			// 测试成功，判断是否需要启用
+			if shouldEnableChannel(err, openaiErr) {
+				if channel.Status == config.ChannelStatusAutoDisabled {
+					EnableChannel(channel.Id, channel.Name, false)
+					sb.WriteString("- 测试成功，已被启用 \n\n")
+				} else {
+					sb.WriteString("- 测试成功，但手动禁用的通道不会自动恢复 \n\n")
+				}
+			}
+			channel.UpdateResponseTime(milliseconds)
+			sb.WriteString(fmt.Sprintf("- 测试完成，耗时 %.2fs\n\n", float64(milliseconds)/1000.0))
+		}
+		testAllDisabledChannelsLock.Lock()
+		testAllDisabledChannelsRunning = false
+		testAllDisabledChannelsLock.Unlock()
+		if isNotify {
+			notify.Send("禁用通道测试完成", sb.String())
+		}
+		// 测试完成后强制释放内存给操作系统
+		debug.FreeOSMemory()
+	}()
+	return nil
+}
+
+func TestAllDisabledChannels(c *gin.Context) {
+	err := testAllDisabledChannels(true)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+	})
+}
+
 func AutomaticallyTestChannels(frequency int) {
 	if frequency <= 0 {
 		return

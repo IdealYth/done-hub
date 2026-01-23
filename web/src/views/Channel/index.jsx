@@ -86,7 +86,7 @@ export default function ChannelList() {
 
   const confirm = useBoolean()
   const [confirmTitle, setConfirmTitle] = useState('')
-  const [confirmConfirm, setConfirmConfirm] = useState(() => {})
+  const [confirmConfirm, setConfirmConfirm] = useState(() => { })
 
   const [groupOptions, setGroupOptions] = useState([])
   const [toolBarValue, setToolBarValue] = useState(originalKeyword)
@@ -127,7 +127,7 @@ export default function ChannelList() {
     savePageSize('channel', newRowsPerPage)
   }
 
-  const fetchPrices = useCallback(async() => {
+  const fetchPrices = useCallback(async () => {
     try {
       const res = await API.get('/api/prices')
       const { success, message, data } = res.data
@@ -141,7 +141,7 @@ export default function ChannelList() {
     }
   }, [])
 
-  const searchChannels = async() => {
+  const searchChannels = async () => {
     // 如果正在搜索中，防止重复提交
     if (searching) {
       return
@@ -160,7 +160,7 @@ export default function ChannelList() {
     setToolBarValue({ ...toolBarValue, [event.target.name]: event.target.value })
   }
 
-  const manageChannel = async(id, action, value, tag = false) => {
+  const manageChannel = async (id, action, value, tag = false) => {
     let url = '/api/channel/'
     if (tag) {
       url = '/api/channel_tag/'
@@ -262,7 +262,7 @@ export default function ChannelList() {
   }
 
   // 处理刷新
-  const handleRefresh = async(reset) => {
+  const handleRefresh = async (reset) => {
     if (reset) {
       setOrderBy('id')
       setOrder('desc')
@@ -283,7 +283,7 @@ export default function ChannelList() {
   )
 
   // 处理测试所有启用渠道
-  const testAllChannels = async() => {
+  const testAllChannels = async () => {
     try {
       const res = await API.get(`/api/channel/test`)
       const { success, message } = res.data
@@ -292,11 +292,11 @@ export default function ChannelList() {
       } else {
         showError(message)
       }
-    } catch (error) {}
+    } catch (error) { }
   }
 
   // 处理删除所有禁用渠道
-  const deleteAllDisabledChannels = async() => {
+  const deleteAllDisabledChannels = async () => {
     try {
       const res = await API.delete(`/api/channel/disabled`)
       const { success, message, data } = res.data
@@ -306,11 +306,11 @@ export default function ChannelList() {
       } else {
         showError(message)
       }
-    } catch (error) {}
+    } catch (error) { }
   }
 
   // 处理更新所有启用渠道余额
-  const updateAllChannelsBalance = async() => {
+  const updateAllChannelsBalance = async () => {
     setSearching(true)
     try {
       const res = await API.get(`/api/channel/update_balance`)
@@ -344,7 +344,7 @@ export default function ChannelList() {
     }
   }
 
-  const fetchData = async(page, rowsPerPage, keyword, order, orderBy) => {
+  const fetchData = async (page, rowsPerPage, keyword, order, orderBy) => {
     setSearching(true)
     keyword = trims(keyword)
 
@@ -370,7 +370,7 @@ export default function ChannelList() {
     setSearching(false)
   }
 
-  const fetchGroups = async() => {
+  const fetchGroups = async () => {
     try {
       let res = await API.get(`/api/group/`)
       setGroupOptions(res.data.data)
@@ -379,7 +379,7 @@ export default function ChannelList() {
     }
   }
 
-  const fetchTags = async() => {
+  const fetchTags = async () => {
     try {
       let res = await API.get(`/api/channel_tag/_all`)
       const { success, data } = res.data
@@ -391,7 +391,7 @@ export default function ChannelList() {
     }
   }
 
-  const fetchModels = async() => {
+  const fetchModels = async () => {
     try {
       let res = await API.get(`/api/channel/models`)
       const { data } = res.data
@@ -436,7 +436,7 @@ export default function ChannelList() {
     setBatchDeleteConfirm(true)
   }
 
-  const confirmBatchDelete = async() => {
+  const confirmBatchDelete = async () => {
     try {
       const { success, message } = await manageChannel(null, 'batch_delete', selectedChannels)
       if (success) {
@@ -497,12 +497,12 @@ export default function ChannelList() {
         </Stack>
 
         <ButtonGroup variant="contained" aria-label="outlined small primary button group">
-          <Button color="primary" startIcon={<Icon icon="solar:add-circle-line-duotone"/>}
-                  onClick={() => handleOpenModal(0)}>
+          <Button color="primary" startIcon={<Icon icon="solar:add-circle-line-duotone" />}
+            onClick={() => handleOpenModal(0)}>
             {t('channel_index.newChannel')}
           </Button>
-          <Button color="primary" startIcon={<Icon icon="solar:menu-dots-bold-duotone"/>}
-                  onClick={() => setOpenBatchModal(true)}>
+          <Button color="primary" startIcon={<Icon icon="solar:menu-dots-bold-duotone" />}
+            onClick={() => setOpenBatchModal(true)}>
             {t('channel_index.batchProcessing')}
           </Button>
         </ButtonGroup>
@@ -534,11 +534,11 @@ export default function ChannelList() {
           <Collapse in={alertExpanded} timeout="auto">
             <Box sx={{ mt: 1 }}>
               {t('channel_index.description1')}
-              <br/>
+              <br />
               {t('channel_index.description2')}
-              <br/>
+              <br />
               {t('channel_index.description3')}
-              <br/>
+              <br />
               {t('channel_index.description4')}
             </Box>
           </Collapse>
@@ -571,7 +571,7 @@ export default function ChannelList() {
               variant="outlined"
               onClick={handleBatchDelete}
               disabled={selectedChannels.length === 0}
-              startIcon={<Icon icon="solar:trash-bin-2-bold-duotone" width={18}/>}
+              startIcon={<Icon icon="solar:trash-bin-2-bold-duotone" width={18} />}
               color="error"
               sx={{
                 minWidth: 'auto',
@@ -608,7 +608,7 @@ export default function ChannelList() {
                 >
                   <Button
                     onClick={() => handleRefresh(true)}
-                    startIcon={<Icon icon="solar:refresh-circle-bold-duotone" width={18}/>}
+                    startIcon={<Icon icon="solar:refresh-circle-bold-duotone" width={18} />}
                     sx={{
                       whiteSpace: 'nowrap',
                       minWidth: 'auto',
@@ -630,7 +630,7 @@ export default function ChannelList() {
                           }}
                         />
                       ) : (
-                        <Icon icon="solar:magnifer-bold-duotone" width={18}/>
+                        <Icon icon="solar:magnifer-bold-duotone" width={18} />
                       )
                     }
                     sx={{
@@ -650,7 +650,7 @@ export default function ChannelList() {
                   </Button>
                   <Button
                     onClick={() => handlePopoverOpen(t('channel_index.testAllChannels'), testAllChannels)}
-                    startIcon={<Icon icon="solar:test-tube-bold-duotone" width={18}/>}
+                    startIcon={<Icon icon="solar:test-tube-bold-duotone" width={18} />}
                     sx={{
                       whiteSpace: 'nowrap',
                       minWidth: 'auto',
@@ -661,7 +661,7 @@ export default function ChannelList() {
                   </Button>
                   <Button
                     onClick={() => handlePopoverOpen(t('channel_index.updateEnabledBalance'), updateAllChannelsBalance)}
-                    startIcon={<Icon icon="solar:dollar-minimalistic-bold-duotone" width={18}/>}
+                    startIcon={<Icon icon="solar:dollar-minimalistic-bold-duotone" width={18} />}
                     sx={{
                       whiteSpace: 'nowrap',
                       minWidth: 'auto',
@@ -672,7 +672,7 @@ export default function ChannelList() {
                   </Button>
                   <Button
                     onClick={() => handlePopoverOpen(t('channel_index.deleteDisabledChannels'), deleteAllDisabledChannels)}
-                    startIcon={<Icon icon="solar:trash-bin-trash-bold-duotone" width={18}/>}
+                    startIcon={<Icon icon="solar:trash-bin-trash-bold-duotone" width={18} />}
                     sx={{
                       whiteSpace: 'nowrap',
                       minWidth: 'auto',
@@ -688,12 +688,12 @@ export default function ChannelList() {
                 <Stack
                   direction="row"
                   spacing={1}
-                  divider={<Divider orientation="vertical" flexItem/>}
+                  divider={<Divider orientation="vertical" flexItem />}
                   justifyContent="space-around"
                   alignItems="center"
                 >
                   <IconButton onClick={() => handleRefresh(true)} size="small">
-                    <Icon icon="solar:refresh-circle-bold-duotone" width={18}/>
+                    <Icon icon="solar:refresh-circle-bold-duotone" width={18} />
                   </IconButton>
                   <IconButton
                     onClick={searchChannels}
@@ -715,80 +715,80 @@ export default function ChannelList() {
                         }}
                       />
                     ) : (
-                      <Icon icon="solar:magnifer-bold-duotone" width={18}/>
+                      <Icon icon="solar:magnifer-bold-duotone" width={18} />
                     )}
                   </IconButton>
                   <IconButton onClick={() => handlePopoverOpen(t('channel_index.testAllChannels'), testAllChannels)}
-                              size="small">
-                    <Icon icon="solar:test-tube-bold-duotone" width={18}/>
+                    size="small">
+                    <Icon icon="solar:test-tube-bold-duotone" width={18} />
                   </IconButton>
                   <IconButton
                     onClick={() => handlePopoverOpen(t('channel_index.updateEnabledBalance'), updateAllChannelsBalance)}
                     size="small"
                   >
-                    <Icon icon="solar:dollar-minimalistic-bold-duotone" width={18}/>
+                    <Icon icon="solar:dollar-minimalistic-bold-duotone" width={18} />
                   </IconButton>
                   <IconButton
                     onClick={() => handlePopoverOpen(t('channel_index.deleteDisabledChannels'), deleteAllDisabledChannels)}
                     size="small"
                   >
-                    <Icon icon="solar:trash-bin-trash-bold-duotone" width={18}/>
+                    <Icon icon="solar:trash-bin-trash-bold-duotone" width={18} />
                   </IconButton>
                   <IconButton onClick={handleBatchDelete} disabled={selectedChannels.length === 0} size="small"
-                              color="error">
-                    <Icon icon="solar:trash-bin-2-bold-duotone" width={18}/>
+                    color="error">
+                    <Icon icon="solar:trash-bin-2-bold-duotone" width={18} />
                   </IconButton>
                 </Stack>
               </Container>
             )}
           </Box>
         </Toolbar>
-        {searching && <LinearProgress/>}
+        {searching && <LinearProgress />}
         <TableContainer>
           <Table sx={{ minWidth: 800 }}>
-              <KeywordTableHead
-                order={order}
-                orderBy={orderBy}
-                onRequestSort={handleSort}
-                numSelected={selectedChannels.length}
-                rowCount={channels.length}
-                onSelectAllClick={handleSelectAll}
-                headLabel={[
-                  { id: 'select', label: '', disableSort: true, width: '50px' },
-                  { id: 'id', label: 'ID', disableSort: false, width: '80px' },
-                  { id: 'name', label: t('channel_index.name'), disableSort: false },
-                  { id: 'group', label: t('channel_index.group'), disableSort: true },
-                  { id: 'type', label: t('channel_index.type'), disableSort: false },
-                  { id: 'status', label: t('channel_index.status'), disableSort: false },
-                  { id: 'response_time', label: t('channel_index.responseTime'), disableSort: false },
-                  // { id: 'balance', label: '余额', disableSort: false },
-                  { id: 'used', label: t('channel_index.usedBalance'), disableSort: true },
-                  { id: 'priority', label: t('channel_index.priority'), disableSort: false, width: '80px' },
-                  { id: 'weight', label: t('channel_index.weight'), disableSort: false, width: '80px' },
-                  { id: 'action', label: t('channel_index.actions'), disableSort: true }
-                ]}
-              />
-              <TableBody>
-                {channels.map((row) => {
-                  const isSelected = selectedChannels.indexOf(row.id) !== -1
-                  return (
-                    <ChannelTableRow
-                      item={row}
-                      manageChannel={manageChannel}
-                      key={row.id}
-                      // handleOpenModal={handleOpenModal}
-                      // setModalChannelId={setEditChannelId}
-                      groupOptions={groupOptions}
-                      onRefresh={handleRefresh}
-                      modelOptions={modelOptions}
-                      prices={prices}
-                      selected={isSelected}
-                      onSelect={() => handleSelectChannel(row.id)}
-                    />
-                  )
-                })}
-              </TableBody>
-            </Table>
+            <KeywordTableHead
+              order={order}
+              orderBy={orderBy}
+              onRequestSort={handleSort}
+              numSelected={selectedChannels.length}
+              rowCount={channels.length}
+              onSelectAllClick={handleSelectAll}
+              headLabel={[
+                { id: 'select', label: '', disableSort: true, width: '50px' },
+                { id: 'id', label: 'ID', disableSort: false, width: '80px' },
+                { id: 'name', label: t('channel_index.name'), disableSort: false },
+                { id: 'group', label: t('channel_index.group'), disableSort: true },
+                { id: 'type', label: t('channel_index.type'), disableSort: false },
+                { id: 'status', label: t('channel_index.status'), disableSort: false },
+                { id: 'response_time', label: t('channel_index.responseTime'), disableSort: false },
+                // { id: 'balance', label: '余额', disableSort: false },
+                { id: 'used', label: t('channel_index.usedBalance'), disableSort: true },
+                { id: 'priority', label: t('channel_index.priority'), disableSort: false, width: '80px' },
+                { id: 'weight', label: t('channel_index.weight'), disableSort: false, width: '80px' },
+                { id: 'action', label: t('channel_index.actions'), disableSort: true }
+              ]}
+            />
+            <TableBody>
+              {channels.map((row) => {
+                const isSelected = selectedChannels.indexOf(row.id) !== -1
+                return (
+                  <ChannelTableRow
+                    item={row}
+                    manageChannel={manageChannel}
+                    key={row.id}
+                    // handleOpenModal={handleOpenModal}
+                    // setModalChannelId={setEditChannelId}
+                    groupOptions={groupOptions}
+                    onRefresh={handleRefresh}
+                    modelOptions={modelOptions}
+                    prices={prices}
+                    selected={isSelected}
+                    onSelect={() => handleSelectChannel(row.id)}
+                  />
+                )
+              })}
+            </TableBody>
+          </Table>
         </TableContainer>
         <TablePagination
           page={page}
@@ -811,7 +811,7 @@ export default function ChannelList() {
         modelOptions={modelOptions}
         prices={prices}
       />
-      <BatchModal open={openBatchModal} setOpen={setOpenBatchModal} groupOptions={groupOptions} modelOptions={modelOptions}/>
+      <BatchModal open={openBatchModal} setOpen={setOpenBatchModal} groupOptions={groupOptions} modelOptions={modelOptions} />
 
       <ConfirmDialog
         open={confirm.value}
