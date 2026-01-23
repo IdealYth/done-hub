@@ -295,6 +295,19 @@ export default function ChannelList() {
     } catch (error) { }
   }
 
+  // 处理测试所有禁用渠道
+  const testAllDisabledChannels = async () => {
+    try {
+      const res = await API.get(`/api/channel/test_disabled`)
+      const { success, message } = res.data
+      if (success) {
+        showInfo(t('channel_row.testAllDisabledChannel'))
+      } else {
+        showError(message)
+      }
+    } catch (error) { }
+  }
+
   // 处理删除所有禁用渠道
   const deleteAllDisabledChannels = async () => {
     try {
@@ -660,6 +673,17 @@ export default function ChannelList() {
                     {t('channel_index.testAllChannels')}
                   </Button>
                   <Button
+                    onClick={() => handlePopoverOpen(t('channel_index.testAllDisabledChannels'), testAllDisabledChannels)}
+                    startIcon={<Icon icon="solar:test-tube-minimalistic-bold-duotone" width={18} />}
+                    sx={{
+                      whiteSpace: 'nowrap',
+                      minWidth: 'auto',
+                      px: 1.5
+                    }}
+                  >
+                    {t('channel_index.testAllDisabledChannels')}
+                  </Button>
+                  <Button
                     onClick={() => handlePopoverOpen(t('channel_index.updateEnabledBalance'), updateAllChannelsBalance)}
                     startIcon={<Icon icon="solar:dollar-minimalistic-bold-duotone" width={18} />}
                     sx={{
@@ -721,6 +745,10 @@ export default function ChannelList() {
                   <IconButton onClick={() => handlePopoverOpen(t('channel_index.testAllChannels'), testAllChannels)}
                     size="small">
                     <Icon icon="solar:test-tube-bold-duotone" width={18} />
+                  </IconButton>
+                  <IconButton onClick={() => handlePopoverOpen(t('channel_index.testAllDisabledChannels'), testAllDisabledChannels)}
+                    size="small">
+                    <Icon icon="solar:test-tube-minimalistic-bold-duotone" width={18} />
                   </IconButton>
                   <IconButton
                     onClick={() => handlePopoverOpen(t('channel_index.updateEnabledBalance'), updateAllChannelsBalance)}
