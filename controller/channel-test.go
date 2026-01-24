@@ -420,8 +420,8 @@ func AutomaticallyTestChannels(frequency int) {
 
 	for {
 		time.Sleep(time.Duration(frequency) * time.Minute)
-		logger.SysLog("testing all channels")
-		_ = testAllChannels(false)
-		logger.SysLog("channel test finished")
+		logger.SysLog("testing all disabled channels")
+		_ = testAllDisabledChannels(false)
+		logger.SysLog("disabled channel test finished")
 	}
 }
