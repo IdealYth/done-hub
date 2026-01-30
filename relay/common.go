@@ -543,7 +543,13 @@ func shouldRetry(c *gin.Context, apiErr *types.OpenAIErrorWithStatusCode, channe
 	switch apiErr.StatusCode {
 	case http.StatusTooManyRequests, http.StatusTemporaryRedirect:
 		return true
-	case http.StatusInternalServerError, http.StatusRequestTimeout, http.StatusGatewayTimeout, 524:
+	case http.StatusInternalServerError:
+		// 500 默认重试，但如果是 "no candidates" 错误则不重试
+		if strings.Contains(apiErr.OpenAIError.Message, "no candidates") {
+			return false
+		}
+		return true
+	case http.StatusRequestTimeout, http.StatusGatewayTimeout, 524:
 		return false
 	case http.StatusBadRequest:
 		return shouldRetryBadRequest(channelType, apiErr)
