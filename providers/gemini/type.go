@@ -499,6 +499,18 @@ func (e *GeminiError) Error() string {
 	return string(bytes) + "\n"
 }
 
+// GetValidationURL 从错误详情中提取 validation_url（用于账户验证等场景）
+func (e *GeminiError) GetValidationURL() string {
+	for _, detail := range e.Details {
+		if detail.Metadata != nil {
+			if url, ok := detail.Metadata["validation_url"].(string); ok && url != "" {
+				return url
+			}
+		}
+	}
+	return ""
+}
+
 type GeminiErrorResponse struct {
 	ErrorInfo *GeminiError `json:"error,omitempty"`
 }

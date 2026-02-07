@@ -219,8 +219,14 @@ func errorHandle(geminiError *gemini.GeminiErrorResponse, token string) *types.O
 
 	cleaningError(geminiError.ErrorInfo, token)
 
+	message := geminiError.ErrorInfo.Message
+	// 附加 validation_url（如果存在），方便排查账户验证问题
+	if validationURL := geminiError.ErrorInfo.GetValidationURL(); validationURL != "" {
+		message = fmt.Sprintf("%s (validation_url: %s)", message, validationURL)
+	}
+
 	return &types.OpenAIError{
-		Message: geminiError.ErrorInfo.Message,
+		Message: message,
 		Type:    "geminicli_error",
 		Param:   geminiError.ErrorInfo.Status,
 		Code:    geminiError.ErrorInfo.Code,
