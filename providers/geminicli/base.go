@@ -400,6 +400,7 @@ func (p *GeminiCliProvider) getRequestHeadersInternal() (headers map[string]stri
 
 	headers["Authorization"] = fmt.Sprintf("Bearer %s", token)
 	headers["Content-Type"] = "application/json"
+	headers["User-Agent"] = "GeminiCLI/0.1.5 (Windows; AMD64)"
 
 	return headers, nil
 }
