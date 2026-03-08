@@ -151,6 +151,11 @@ func RequestErrorHandle(token string) requester.HttpErrorHandler {
 		}
 		resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
+		// 429 错误时打印完整的上游原始响应体，方便排查 quota 错误结构
+		if resp.StatusCode == http.StatusTooManyRequests {
+			logger.SysLog(fmt.Sprintf("[Antigravity] 429 raw response body: %s", string(bodyBytes)))
+		}
+
 		geminiError := &gemini.GeminiErrorResponse{}
 		resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		if err := json.NewDecoder(resp.Body).Decode(geminiError); err == nil {
@@ -160,12 +165,11 @@ func RequestErrorHandle(token string) requester.HttpErrorHandler {
 			if openAIError != nil && geminiError.ErrorInfo != nil && geminiError.ErrorInfo.Code == http.StatusTooManyRequests {
 				for _, detail := range geminiError.ErrorInfo.Details {
 					if detail.Metadata != nil {
-						if quotaResetDelay, ok := detail.Metadata["quotaResetDelay"].(string); ok && quotaResetDelay != "" {
-							if duration, parseErr := time.ParseDuration(quotaResetDelay); parseErr == nil {
-								resetTimestamp := time.Now().Unix() + int64(duration.Seconds())
-								openAIError.RateLimitResetAt = resetTimestamp
-								logger.SysLog(fmt.Sprintf("[Antigravity] Rate limit detected, quota reset delay: %s, reset at: %s",
-									quotaResetDelay, time.Unix(resetTimestamp, 0).Format(time.RFC3339)))
+						if resetTS, ok := detail.Metadata["quotaResetTimeStamp"].(string); ok && resetTS != "" {
+							if t, parseErr := time.Parse(time.RFC3339, resetTS); parseErr == nil {
+								openAIError.RateLimitResetAt = t.Unix()
+								logger.SysLog(fmt.Sprintf("[Antigravity] Rate limit detected, quota reset at: %s",
+									t.Format(time.RFC3339)))
 								break
 							}
 						}
@@ -183,12 +187,11 @@ func RequestErrorHandle(token string) requester.HttpErrorHandler {
 			if openAIError != nil && geminiErrors.Error() != nil && geminiErrors.Error().ErrorInfo != nil && geminiErrors.Error().ErrorInfo.Code == http.StatusTooManyRequests {
 				for _, detail := range geminiErrors.Error().ErrorInfo.Details {
 					if detail.Metadata != nil {
-						if quotaResetDelay, ok := detail.Metadata["quotaResetDelay"].(string); ok && quotaResetDelay != "" {
-							if duration, parseErr := time.ParseDuration(quotaResetDelay); parseErr == nil {
-								resetTimestamp := time.Now().Unix() + int64(duration.Seconds())
-								openAIError.RateLimitResetAt = resetTimestamp
-								logger.SysLog(fmt.Sprintf("[Antigravity] Rate limit detected, quota reset delay: %s, reset at: %s",
-									quotaResetDelay, time.Unix(resetTimestamp, 0).Format(time.RFC3339)))
+						if resetTS, ok := detail.Metadata["quotaResetTimeStamp"].(string); ok && resetTS != "" {
+							if t, parseErr := time.Parse(time.RFC3339, resetTS); parseErr == nil {
+								openAIError.RateLimitResetAt = t.Unix()
+								logger.SysLog(fmt.Sprintf("[Antigravity] Rate limit detected, quota reset at: %s",
+									t.Format(time.RFC3339)))
 								break
 							}
 						}
