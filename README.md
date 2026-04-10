@@ -28,6 +28,7 @@ _本项目是基于[one-hub](https://github.com/MartialBE/one-api)二次开发�
 
 ### 我的修改
 - 修改 500 状态码默认触发渠道重试，但 `no candidates` 错误除外（避免空回复时无意义重试）
+- Antigravity 渠道：默认端点改为 prod，添加多端点自动回退（`prod → daily → sandbox`），429 时自动切换端点重试
 
 > **注意**: 本版本仅供个人使用，如需官方支持请使用 [原版项目](https://github.com/deanxv/done-hub)
 

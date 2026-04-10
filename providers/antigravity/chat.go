@@ -22,7 +22,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// CreateChatCompletion 创建聊天补全（非流式）
+// CreateChatCompletion 创建聊天补全（非流式，支持多端点回退）
 func (p *AntigravityProvider) CreateChatCompletion(request *types.ChatCompletionRequest) (*types.ChatCompletionResponse, *types.OpenAIErrorWithStatusCode) {
 	// 转换为Gemini格式
 	geminiRequest, errWithCode := gemini.ConvertFromChatOpenai(request)
@@ -33,30 +33,47 @@ func (p *AntigravityProvider) CreateChatCompletion(request *types.ChatCompletion
 	// 修复空 Parameters 问题：Claude API 要求 input_schema 必须存在
 	fixNilToolParameters(geminiRequest)
 
-	// 构建内部API请求
-	req, errWithCode := p.getChatRequest(geminiRequest, false, false)
-	if errWithCode != nil {
-		return nil, errWithCode
-	}
-	defer req.Body.Close()
+	fallbackURLs := p.GetFallbackURLs()
+	var lastErr *types.OpenAIErrorWithStatusCode
 
-	// 使用包装的响应结构
-	antigravityResponse := &AntigravityResponse{}
-	// 发送请求
-	_, errWithCode = p.Requester.SendRequest(req, antigravityResponse, false)
-	if errWithCode != nil {
-		return nil, errWithCode
+	for idx, baseURL := range fallbackURLs {
+		// 构建内部API请求
+		req, errWithCode := p.getChatRequest(geminiRequest, false, false, baseURL)
+		if errWithCode != nil {
+			return nil, errWithCode
+		}
+		defer req.Body.Close()
+
+		// 使用包装的响应结构
+		antigravityResponse := &AntigravityResponse{}
+		// 发送请求
+		_, errWithCode = p.Requester.SendRequest(req, antigravityResponse, false)
+		if errWithCode != nil {
+			// 429 错误且还有回退端点，尝试下一个
+			if errWithCode.StatusCode == http.StatusTooManyRequests && idx+1 < len(fallbackURLs) {
+				logger.SysLog(fmt.Sprintf("[Antigravity] 429 on %s, retrying with fallback: %s", baseURL, fallbackURLs[idx+1]))
+				lastErr = errWithCode
+				continue
+			}
+			return nil, errWithCode
+		}
+
+		// 提取实际的 Gemini 响应
+		if antigravityResponse.Response == nil {
+			return nil, common.StringErrorWrapper("no response in upstream response", "no_response", http.StatusInternalServerError)
+		}
+
+		return gemini.ConvertToChatOpenai(p, antigravityResponse.Response, request)
 	}
 
-	// 提取实际的 Gemini 响应
-	if antigravityResponse.Response == nil {
-		return nil, common.StringErrorWrapper("no response in upstream response", "no_response", http.StatusInternalServerError)
+	// 所有端点都失败
+	if lastErr != nil {
+		return nil, lastErr
 	}
-
-	return gemini.ConvertToChatOpenai(p, antigravityResponse.Response, request)
+	return nil, common.StringErrorWrapper("all endpoints exhausted", "endpoints_exhausted", http.StatusServiceUnavailable)
 }
 
-// CreateChatCompletionStream 创建聊天补全（流式）
+// CreateChatCompletionStream 创建聊天补全（流式，支持多端点回退）
 func (p *AntigravityProvider) CreateChatCompletionStream(request *types.ChatCompletionRequest) (requester.StreamReaderInterface[string], *types.OpenAIErrorWithStatusCode) {
 	// 转换为Gemini格式
 	geminiRequest, errWithCode := gemini.ConvertFromChatOpenai(request)
@@ -67,27 +84,44 @@ func (p *AntigravityProvider) CreateChatCompletionStream(request *types.ChatComp
 	// 修复空 Parameters 问题：Claude API 要求 input_schema 必须存在
 	fixNilToolParameters(geminiRequest)
 
-	// 构建内部API请求
-	req, errWithCode := p.getChatRequest(geminiRequest, true, false)
-	if errWithCode != nil {
-		return nil, errWithCode
-	}
-	defer req.Body.Close()
+	fallbackURLs := p.GetFallbackURLs()
+	var lastErr *types.OpenAIErrorWithStatusCode
 
-	// 发送请求
-	resp, errWithCode := p.Requester.SendRequestRaw(req)
-	if errWithCode != nil {
-		return nil, errWithCode
+	for idx, baseURL := range fallbackURLs {
+		// 构建内部API请求
+		req, errWithCode := p.getChatRequest(geminiRequest, true, false, baseURL)
+		if errWithCode != nil {
+			return nil, errWithCode
+		}
+		defer req.Body.Close()
+
+		// 发送请求
+		resp, errWithCode := p.Requester.SendRequestRaw(req)
+		if errWithCode != nil {
+			// 429 错误且还有回退端点，尝试下一个
+			if errWithCode.StatusCode == http.StatusTooManyRequests && idx+1 < len(fallbackURLs) {
+				logger.SysLog(fmt.Sprintf("[Antigravity] Stream 429 on %s, retrying with fallback: %s", baseURL, fallbackURLs[idx+1]))
+				lastErr = errWithCode
+				continue
+			}
+			return nil, errWithCode
+		}
+
+		// 使用 Antigravity 专用的流处理器
+		chatHandler := &AntigravityStreamHandler{
+			Usage:   p.Usage,
+			Request: request,
+			Context: p.Context,
+		}
+
+		return requester.RequestStream(p.Requester, resp, chatHandler.HandlerStream)
 	}
 
-	// 使用 Antigravity 专用的流处理器
-	chatHandler := &AntigravityStreamHandler{
-		Usage:   p.Usage,
-		Request: request,
-		Context: p.Context,
+	// 所有端点都失败
+	if lastErr != nil {
+		return nil, lastErr
 	}
-
-	return requester.RequestStream(p.Requester, resp, chatHandler.HandlerStream)
+	return nil, common.StringErrorWrapper("all endpoints exhausted", "endpoints_exhausted", http.StatusServiceUnavailable)
 }
 
 // fixNilToolParameters 修复空的 tool parameters
@@ -115,15 +149,21 @@ func generateRequestID() string {
 	return "agent-" + uuid.New().String()
 }
 
-// getChatRequest 构建内部API请求
-func (p *AntigravityProvider) getChatRequest(geminiRequest *gemini.GeminiChatRequest, isStream bool, isRelay bool) (*http.Request, *types.OpenAIErrorWithStatusCode) {
+// getChatRequest 构建内部API请求（支持指定 baseURL 用于多端点回退）
+func (p *AntigravityProvider) getChatRequest(geminiRequest *gemini.GeminiChatRequest, isStream bool, isRelay bool, baseURL string) (*http.Request, *types.OpenAIErrorWithStatusCode) {
 	// 确定请求URL
 	action := "generateContent"
 	if isStream {
 		action = "streamGenerateContent"
 	}
 
-	fullRequestURL := p.GetFullRequestURL(action, geminiRequest.Model)
+	// 使用指定的 baseURL 构建请求 URL
+	var fullRequestURL string
+	if baseURL != "" {
+		fullRequestURL = p.GetFullRequestURLWithBase(action, baseURL)
+	} else {
+		fullRequestURL = p.GetFullRequestURL(action, geminiRequest.Model)
+	}
 
 	// 获取请求头
 	headers, err := p.getRequestHeadersInternal()
@@ -435,7 +475,7 @@ func applyAntigravityGenerationConfigDefaults(requestMap map[string]interface{})
 		genConfig["candidateCount"] = 1
 	}
 
-	// 合并 stopSequences
+	// 合并 stopSequences（Gemini API 限制最多 5 个）
 	existingStops := []string{}
 	if stops, ok := genConfig["stopSequences"].([]interface{}); ok {
 		for _, s := range stops {
@@ -446,9 +486,25 @@ func applyAntigravityGenerationConfigDefaults(requestMap map[string]interface{})
 	} else if stops, ok := genConfig["stopSequences"].([]string); ok {
 		existingStops = stops
 	}
-	allStops := make([]string, 0, len(defaultAntigravityStopSequences)+len(existingStops))
-	allStops = append(allStops, defaultAntigravityStopSequences...)
-	allStops = append(allStops, existingStops...)
+	// 去重合并：默认的优先，再追加请求中的
+	seen := make(map[string]bool, len(defaultAntigravityStopSequences))
+	allStops := make([]string, 0, 5)
+	for _, s := range defaultAntigravityStopSequences {
+		if !seen[s] {
+			seen[s] = true
+			allStops = append(allStops, s)
+		}
+	}
+	for _, s := range existingStops {
+		if !seen[s] {
+			seen[s] = true
+			allStops = append(allStops, s)
+		}
+	}
+	// 截断到最多 5 个
+	if len(allStops) > 5 {
+		allStops = allStops[:5]
+	}
 	genConfig["stopSequences"] = allStops
 
 	// 设置默认 temperature

@@ -21,6 +21,13 @@ import (
 
 const TokenCacheKey = "api_token:antigravity"
 
+// Antigravity 多端点回退 URL（参考 CLIProxyAPI）
+const (
+	AntigravityBaseURLProd         = "https://cloudcode-pa.googleapis.com"               // 生产环境（主要）
+	AntigravityBaseURLDaily        = "https://daily-cloudcode-pa.googleapis.com"         // 日常环境
+	AntigravitySandboxBaseURLDaily = "https://daily-cloudcode-pa.sandbox.googleapis.com" // 沙盒环境
+)
+
 type AntigravityProviderFactory struct{}
 
 // Create 创建 AntigravityProvider
@@ -29,7 +36,7 @@ func (f AntigravityProviderFactory) Create(channel *model.Channel) base.Provider
 		GeminiProvider: gemini.GeminiProvider{
 			OpenAIProvider: openai.OpenAIProvider{
 				BaseProvider: base.BaseProvider{
-					Config:    getConfig("https://daily-cloudcode-pa.googleapis.com"),
+					Config:    getConfig(AntigravityBaseURLProd),
 					Channel:   channel,
 					Requester: requester.NewHTTPRequester(channel.GetProxy(), RequestErrorHandle("")),
 				},
@@ -53,8 +60,9 @@ func (f AntigravityProviderFactory) Create(channel *model.Channel) base.Provider
 func parseAntigravityConfig(provider *AntigravityProvider) {
 	channel := provider.Channel
 
-	// 默认配置
-	endpoint := "https://daily-cloudcode-pa.googleapis.com"
+	// 默认配置：使用生产环境端点
+	endpoint := AntigravityBaseURLProd
+	customEndpoint := false
 
 	// 尝试从 Plugin 中获取配置
 	if channel.Plugin != nil {
@@ -63,6 +71,7 @@ func parseAntigravityConfig(provider *AntigravityProvider) {
 			if epVal, ok := antigravityConfig["endpoint"]; ok {
 				if ep, ok := epVal.(string); ok && ep != "" {
 					endpoint = ep
+					customEndpoint = true
 				}
 			}
 		}
@@ -70,6 +79,19 @@ func parseAntigravityConfig(provider *AntigravityProvider) {
 
 	provider.Endpoint = endpoint
 	provider.Config = getConfig(endpoint)
+
+	// 设置多端点回退列表
+	if customEndpoint {
+		// 用户指定了自定义端点，只使用该端点
+		provider.FallbackURLs = []string{endpoint}
+	} else {
+		// 使用默认的多端点回退顺序：prod → daily → sandbox
+		provider.FallbackURLs = []string{
+			AntigravityBaseURLProd,
+			AntigravityBaseURLDaily,
+			AntigravitySandboxBaseURLDaily,
+		}
+	}
 
 	// 尝试解析完整的 OAuth2 凭证（优先）
 	if channel.Key != "" {
@@ -125,14 +147,15 @@ func parseAntigravityConfig(provider *AntigravityProvider) {
 
 type AntigravityProvider struct {
 	gemini.GeminiProvider
-	Endpoint    string
-	ProjectID   string
-	Credentials *OAuth2Credentials // OAuth2 凭证（包含 refresh_token）
+	Endpoint     string
+	FallbackURLs []string // 多端点回退 URL 列表
+	ProjectID    string
+	Credentials  *OAuth2Credentials // OAuth2 凭证（包含 refresh_token）
 }
 
 func getConfig(endpoint string) base.ProviderConfig {
 	if endpoint == "" {
-		endpoint = "https://daily-cloudcode-pa.googleapis.com"
+		endpoint = AntigravityBaseURLProd
 	}
 	return base.ProviderConfig{
 		BaseURL:           endpoint,
@@ -278,6 +301,25 @@ func (p *AntigravityProvider) GetFullRequestURL(requestURL string, modelName str
 	baseURL := strings.TrimSuffix(p.GetBaseURL(), "/")
 	// Antigravity 使用内部 API 格式
 	return fmt.Sprintf("%s/v1internal:%s", baseURL, requestURL)
+}
+
+// GetFullRequestURLWithBase 使用指定的 baseURL 构建请求 URL（用于多端点回退）
+func (p *AntigravityProvider) GetFullRequestURLWithBase(requestURL string, baseURL string) string {
+	baseURL = strings.TrimSuffix(baseURL, "/")
+	return fmt.Sprintf("%s/v1internal:%s", baseURL, requestURL)
+}
+
+// GetFallbackURLs 获取多端点回退列表
+func (p *AntigravityProvider) GetFallbackURLs() []string {
+	if len(p.FallbackURLs) > 0 {
+		return p.FallbackURLs
+	}
+	// 兜底：使用默认的多端点回退顺序
+	return []string{
+		AntigravityBaseURLProd,
+		AntigravityBaseURLDaily,
+		AntigravitySandboxBaseURLDaily,
+	}
 }
 
 func (p *AntigravityProvider) GetToken() (string, error) {

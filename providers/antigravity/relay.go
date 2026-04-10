@@ -14,70 +14,104 @@ import (
 	"time"
 )
 
-// CreateGeminiChat 创建Gemini格式的聊天（非流式）
+// CreateGeminiChat 创建Gemini格式的聊天（非流式，支持多端点回退）
 func (p *AntigravityProvider) CreateGeminiChat(request *gemini.GeminiChatRequest) (*gemini.GeminiChatResponse, *types.OpenAIErrorWithStatusCode) {
-	req, errWithCode := p.getChatRequest(request, false, true)
-	if errWithCode != nil {
-		return nil, errWithCode
+	fallbackURLs := p.GetFallbackURLs()
+	var lastErr *types.OpenAIErrorWithStatusCode
+
+	for idx, baseURL := range fallbackURLs {
+		req, errWithCode := p.getChatRequest(request, false, true, baseURL)
+		if errWithCode != nil {
+			return nil, errWithCode
+		}
+		defer req.Body.Close()
+
+		// 使用包装的响应结构
+		antigravityResponse := &AntigravityResponse{}
+		// 发送请求
+		_, errWithCode = p.Requester.SendRequest(req, antigravityResponse, false)
+		if errWithCode != nil {
+			// 429 错误且还有回退端点，尝试下一个
+			if errWithCode.StatusCode == http.StatusTooManyRequests && idx+1 < len(fallbackURLs) {
+				logger.SysLog(fmt.Sprintf("[Antigravity] Relay 429 on %s, retrying with fallback: %s", baseURL, fallbackURLs[idx+1]))
+				lastErr = errWithCode
+				continue
+			}
+			return nil, errWithCode
+		}
+
+		// 提取实际的 Gemini 响应
+		if antigravityResponse.Response == nil {
+			return nil, common.StringErrorWrapper("no response in upstream response", "no_response", http.StatusInternalServerError)
+		}
+
+		geminiResponse := antigravityResponse.Response
+
+		// 只有非 countTokens 请求才检查 candidates
+		if request.Action != "countTokens" && len(geminiResponse.Candidates) == 0 {
+			return nil, common.StringErrorWrapper("no candidates", "no_candidates", http.StatusInternalServerError)
+		}
+
+		usage := p.GetUsage()
+		*usage = gemini.ConvertOpenAIUsage(geminiResponse.UsageMetadata)
+
+		return geminiResponse, nil
 	}
-	defer req.Body.Close()
 
-	// 使用包装的响应结构
-	antigravityResponse := &AntigravityResponse{}
-	// 发送请求
-	_, errWithCode = p.Requester.SendRequest(req, antigravityResponse, false)
-	if errWithCode != nil {
-		return nil, errWithCode
+	// 所有端点都失败
+	if lastErr != nil {
+		return nil, lastErr
 	}
-
-	// 提取实际的 Gemini 响应
-	if antigravityResponse.Response == nil {
-		return nil, common.StringErrorWrapper("no response in upstream response", "no_response", http.StatusInternalServerError)
-	}
-
-	geminiResponse := antigravityResponse.Response
-
-	// 只有非 countTokens 请求才检查 candidates
-	if request.Action != "countTokens" && len(geminiResponse.Candidates) == 0 {
-		return nil, common.StringErrorWrapper("no candidates", "no_candidates", http.StatusInternalServerError)
-	}
-
-	usage := p.GetUsage()
-	*usage = gemini.ConvertOpenAIUsage(geminiResponse.UsageMetadata)
-
-	return geminiResponse, nil
+	return nil, common.StringErrorWrapper("all endpoints exhausted", "endpoints_exhausted", http.StatusServiceUnavailable)
 }
 
-// CreateGeminiChatStream 创建Gemini格式的聊天（流式）
+// CreateGeminiChatStream 创建Gemini格式的聊天（流式，支持多端点回退）
 func (p *AntigravityProvider) CreateGeminiChatStream(request *gemini.GeminiChatRequest) (requester.StreamReaderInterface[string], *types.OpenAIErrorWithStatusCode) {
-	req, errWithCode := p.getChatRequest(request, true, true)
-	if errWithCode != nil {
-		return nil, errWithCode
+	fallbackURLs := p.GetFallbackURLs()
+	var lastErr *types.OpenAIErrorWithStatusCode
+
+	for idx, baseURL := range fallbackURLs {
+		req, errWithCode := p.getChatRequest(request, true, true, baseURL)
+		if errWithCode != nil {
+			return nil, errWithCode
+		}
+		defer req.Body.Close()
+
+		channel := p.GetChannel()
+
+		// 使用 Antigravity 专用的 Relay 流处理器
+		chatHandler := &AntigravityRelayStreamHandler{
+			Usage:     p.Usage,
+			ModelName: request.Model,
+			Prefix:    `data: `,
+			Key:       channel.Key,
+		}
+
+		// 发送请求
+		resp, errWithCode := p.Requester.SendRequestRaw(req)
+		if errWithCode != nil {
+			// 429 错误且还有回退端点，尝试下一个
+			if errWithCode.StatusCode == http.StatusTooManyRequests && idx+1 < len(fallbackURLs) {
+				logger.SysLog(fmt.Sprintf("[Antigravity] Relay stream 429 on %s, retrying with fallback: %s", baseURL, fallbackURLs[idx+1]))
+				lastErr = errWithCode
+				continue
+			}
+			return nil, errWithCode
+		}
+
+		stream, errWithCode := requester.RequestNoTrimStream(p.Requester, resp, chatHandler.HandlerStream)
+		if errWithCode != nil {
+			return nil, errWithCode
+		}
+
+		return stream, nil
 	}
-	defer req.Body.Close()
 
-	channel := p.GetChannel()
-
-	// 使用 Antigravity 专用的 Relay 流处理器
-	chatHandler := &AntigravityRelayStreamHandler{
-		Usage:     p.Usage,
-		ModelName: request.Model,
-		Prefix:    `data: `,
-		Key:       channel.Key,
+	// 所有端点都失败
+	if lastErr != nil {
+		return nil, lastErr
 	}
-
-	// 发送请求
-	resp, errWithCode := p.Requester.SendRequestRaw(req)
-	if errWithCode != nil {
-		return nil, errWithCode
-	}
-
-	stream, errWithCode := requester.RequestNoTrimStream(p.Requester, resp, chatHandler.HandlerStream)
-	if errWithCode != nil {
-		return nil, errWithCode
-	}
-
-	return stream, nil
+	return nil, common.StringErrorWrapper("all endpoints exhausted", "endpoints_exhausted", http.StatusServiceUnavailable)
 }
 
 // AntigravityRelayStreamHandler Antigravity Relay 流式响应处理器
