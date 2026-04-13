@@ -321,9 +321,8 @@ func (p *GeminiCliProvider) GetToken() (string, error) {
 
 	needsUpdate := false
 	if p.Credentials.IsExpired() && p.Credentials.RefreshToken != "" {
-		proxyURL := p.Channel.GetProxy()
-
-		if err := p.Credentials.Refresh(ctx, proxyURL, 3); err != nil {
+		// Token refresh 直连 Google OAuth，不走渠道代理（避免 IPv6 代理池超时）
+		if err := p.Credentials.Refresh(ctx, "", 3); err != nil {
 			logger.LogError(ctx, fmt.Sprintf("Failed to refresh geminicli token: %s", err.Error()))
 			return "", fmt.Errorf("failed to refresh token: %w", err)
 		}
