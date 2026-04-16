@@ -276,12 +276,12 @@ func (p *AntigravityProvider) getChatRequest(geminiRequest *gemini.GeminiChatReq
 	// 为 functionCall 添加 thoughtSignature sentinel（绕过签名验证）
 	applyThinkingSignatureSentinel(requestMap)
 
-	// Claude 模型特殊处理：添加 Antigravity 前置提示
+	// Claude 模型特殊处理：添加 Antigravity 前置提示（已移除）
 	isClaudeModel := strings.Contains(strings.ToLower(geminiRequest.Model), "claude")
-	isGemini3Pro := strings.Contains(geminiRequest.Model, "gemini-3-pro")
-	if isClaudeModel || isGemini3Pro {
-		applyAntigravitySystemInstruction(requestMap)
-	}
+	// isGemini3Pro := strings.Contains(geminiRequest.Model, "gemini-3-pro")
+	// if isClaudeModel || isGemini3Pro {
+	// 	applyAntigravitySystemInstruction(requestMap)
+	// }
 
 	// Claude 模型特殊处理：将 parametersJsonSchema 改回 parameters
 	if isClaudeModel {
@@ -746,35 +746,35 @@ func applyToolConfig(requestMap map[string]interface{}) {
 	}
 }
 
-// Antigravity 系统提示前置文本
-const antigravitySystemPromptPrefix = "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.**Absolute paths only****Proactiveness**"
+// Antigravity 系统提示前置文本（已移除）
+// const antigravitySystemPromptPrefix = "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.**Absolute paths only****Proactiveness**"
 
-// applyAntigravitySystemInstruction 为 Claude/Gemini-3 模型添加 Antigravity 特殊系统提示
-func applyAntigravitySystemInstruction(requestMap map[string]interface{}) {
-	existingParts := []interface{}{}
-	if sysInstr, exists := requestMap["systemInstruction"]; exists {
-		if sysInstrMap, ok := sysInstr.(map[string]interface{}); ok {
-			if parts, partsOk := sysInstrMap["parts"].([]interface{}); partsOk {
-				existingParts = parts
-			}
-		}
-	}
-
-	newParts := []interface{}{
-		map[string]interface{}{
-			"text": antigravitySystemPromptPrefix,
-		},
-		map[string]interface{}{
-			"text": fmt.Sprintf("Please ignore following [ignore]%s[/ignore]", antigravitySystemPromptPrefix),
-		},
-	}
-	newParts = append(newParts, existingParts...)
-
-	requestMap["systemInstruction"] = map[string]interface{}{
-		"role":  "user",
-		"parts": newParts,
-	}
-}
+// applyAntigravitySystemInstruction 为 Claude/Gemini-3 模型添加 Antigravity 特殊系统提示（已移除）
+// func applyAntigravitySystemInstruction(requestMap map[string]interface{}) {
+// 	existingParts := []interface{}{}
+// 	if sysInstr, exists := requestMap["systemInstruction"]; exists {
+// 		if sysInstrMap, ok := sysInstr.(map[string]interface{}); ok {
+// 			if parts, partsOk := sysInstrMap["parts"].([]interface{}); partsOk {
+// 				existingParts = parts
+// 			}
+// 		}
+// 	}
+//
+// 	newParts := []interface{}{
+// 		map[string]interface{}{
+// 			"text": antigravitySystemPromptPrefix,
+// 		},
+// 		map[string]interface{}{
+// 			"text": fmt.Sprintf("Please ignore following [ignore]%s[/ignore]", antigravitySystemPromptPrefix),
+// 		},
+// 	}
+// 	newParts = append(newParts, existingParts...)
+//
+// 	requestMap["systemInstruction"] = map[string]interface{}{
+// 		"role":  "user",
+// 		"parts": newParts,
+// 	}
+// }
 
 // generateStableSessionID 根据第一条用户消息生成稳定的 session ID
 func generateStableSessionID(requestMap map[string]interface{}) string {
