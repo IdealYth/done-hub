@@ -223,26 +223,12 @@ func CleanGeminiRequestMap(data map[string]interface{}, isVertexAI bool) {
 								}
 							}
 
-							// 为 model 角色的 thought/functionCall part 注入 thoughtSignature 哨兵值
-							if role, _ := contentMap["role"].(string); role == "model" {
-								needsSig := false
-								if thought, _ := partMap["thought"].(bool); thought {
-									needsSig = true
-								}
-								if _, has := partMap["functionCall"]; has {
-									needsSig = true
-								}
-								if _, has := partMap["function_call"]; has {
-									needsSig = true
-								}
-
-								if needsSig {
-									existingSig, _ := partMap["thoughtSignature"].(string)
-									if existingSig == "" || len(existingSig) < minThoughtSignatureLength {
-										partMap["thoughtSignature"] = skipThoughtSignatureValidator
-									}
-								}
-							}
+							// 历史曾在此为 model 角色的 thought/functionCall part 注入哨兵
+							// "skip_thought_signature_validator"——目的是绕过 Antigravity 网关签名校验，
+							// 但官方 Gemini / Vertex 不识别此哨兵会以 400 "Function call is missing a
+							// thought_signature" 拒绝请求。Antigravity 路径自有
+							// providers/antigravity/chat.go 的 applyThinkingSignatureSentinel 注入，
+							// 无需在此重复；合法签名的透传由 OpenAIToGeminiChatContent (type.go) 负责。
 						}
 					}
 				}
@@ -577,8 +563,8 @@ func ConvertFromChatOpenai(request *types.ChatCompletionRequest) (*GeminiChatReq
 			}
 			hasConfig := false
 
-			// 4. 设置 Budget (仅当 budget 有效时)
-			if budget > 0 {
+			// 4. 设置 Budget (仅当 budget 有效时，0 表示禁用 thinking)
+			if budget >= 0 {
 				thinkingConfig.ThinkingBudget = &budget
 				hasConfig = true
 			}
@@ -799,7 +785,24 @@ func ConvertToChatOpenai(provider base.ProviderInterface, response *GeminiChatRe
 	}
 
 	usage := provider.GetUsage()
-	*usage = ConvertOpenAIUsageWithFallback(response.UsageMetadata, response)
+	// 与 providers/gemini/relay.go:CreateGeminiChat 的兜底对齐：
+	// 上游 promptTokenCount<=0 时保留 RelayHandler 在 send 前填的本地预估值，
+	// 避免整对象赋值导致消费日志记成 "0 in / N out"。
+	upstreamUsage := ConvertOpenAIUsageWithFallback(response.UsageMetadata, response)
+	if upstreamUsage.PromptTokens <= 0 && usage.PromptTokens > 0 {
+		upstreamUsage.PromptTokens = usage.PromptTokens
+	}
+	// total 兜底（max 逻辑，与流式 HandlerStream 对齐）：保证 total >= prompt + completion。
+	// 覆盖两种中转商裁字段模式：
+	//   - 只裁 prompt 留 total：upstream total 仍含真实 prompt，>= expected，不动
+	//   - prompt 和 total 一起裁：upstream total=0 或偏小，提升到 expected
+	if upstreamUsage.PromptTokens > 0 {
+		expected := upstreamUsage.PromptTokens + upstreamUsage.CompletionTokens
+		if upstreamUsage.TotalTokens < expected {
+			upstreamUsage.TotalTokens = expected
+		}
+	}
+	*usage = upstreamUsage
 	openaiResponse.Usage = usage
 
 	return
@@ -893,10 +896,14 @@ func (h *GeminiStreamHandler) convertToOpenaiStream(geminiResponse *GeminiChatRe
 	}
 
 	// 和ExecutableCode的tokens共用，所以跳过
-	// 检查是否有有效的 UsageMetadata
+	// 检查是否有有效的 UsageMetadata。Prompt/Total 可能被中转商裁掉，
+	// 需要把 Candidates/Thoughts 也纳入判断，避免漏算 CompletionTokens
 	hasValidUsage := false
 	if geminiResponse.UsageMetadata != nil &&
-		(geminiResponse.UsageMetadata.TotalTokenCount > 0 || geminiResponse.UsageMetadata.PromptTokenCount > 0) {
+		(geminiResponse.UsageMetadata.TotalTokenCount > 0 ||
+			geminiResponse.UsageMetadata.PromptTokenCount > 0 ||
+			geminiResponse.UsageMetadata.CandidatesTokenCount > 0 ||
+			geminiResponse.UsageMetadata.ThoughtsTokenCount > 0) {
 		hasValidUsage = true
 	}
 
@@ -912,7 +919,17 @@ func (h *GeminiStreamHandler) convertToOpenaiStream(geminiResponse *GeminiChatRe
 		return
 	}
 
-	h.Usage.PromptTokens = geminiResponse.UsageMetadata.PromptTokenCount
+	// 与 providers/gemini/relay.go:HandlerStream 的兜底对齐：上游 PromptTokenCount
+	// 可能为 0（中转商裁字段、cache 命中等），保留本地预估值，否则消费日志记成 "0 in / N out"。
+	if geminiResponse.UsageMetadata.PromptTokenCount > 0 {
+		h.Usage.PromptTokens = geminiResponse.UsageMetadata.PromptTokenCount
+	}
+
+	// 缓存命中 token：流式下取最后一个非零值（与 PromptTokens 一样是覆盖语义），
+	// 计费时按缓存倍率折算（见 ConvertOpenAIUsage 注释）。
+	if geminiResponse.UsageMetadata.CachedContentTokenCount > 0 {
+		h.Usage.PromptTokensDetails.CachedTokens = geminiResponse.UsageMetadata.CachedContentTokenCount
+	}
 
 	// 计算 completion tokens，确保不为负数
 	completionTokens := geminiResponse.UsageMetadata.CandidatesTokenCount + geminiResponse.UsageMetadata.ThoughtsTokenCount
@@ -922,10 +939,18 @@ func (h *GeminiStreamHandler) convertToOpenaiStream(geminiResponse *GeminiChatRe
 	h.Usage.CompletionTokens = completionTokens
 	h.Usage.CompletionTokensDetails.ReasoningTokens = geminiResponse.UsageMetadata.ThoughtsTokenCount
 
-	// 如果 TotalTokenCount 为 0 但有 PromptTokenCount，则计算总数
+	// total 兜底：保证 total >= prompt + completion（OpenAI 协议契约）。
+	// 允许 upstream total 比它大（reasoning 模型 thoughts 已计入 completion 不会偏大；
+	// 真大说明 upstream 有额外计费维度如 cache 包含在 prompt 里，信任 upstream 值不去动）。
+	// 这条同时覆盖了两种中转商裁字段模式：
+	//   - 只裁 prompt 留 total（total 仍含真实 prompt，>= expected，不改）
+	//   - prompt 和 total 一起裁（total=0 或偏小，提升到 expected）
 	totalTokens := geminiResponse.UsageMetadata.TotalTokenCount
-	if totalTokens == 0 && geminiResponse.UsageMetadata.PromptTokenCount > 0 {
-		totalTokens = geminiResponse.UsageMetadata.PromptTokenCount + completionTokens
+	if h.Usage.PromptTokens > 0 {
+		expected := h.Usage.PromptTokens + completionTokens
+		if totalTokens < expected {
+			totalTokens = expected
+		}
 	}
 	h.Usage.TotalTokens = totalTokens
 }
@@ -991,6 +1016,13 @@ func ConvertOpenAIUsage(geminiUsage *GeminiUsageMetadata) types.Usage {
 		},
 	}
 
+	// cachedContentTokenCount 是上游缓存命中的 token 数，已包含在 PromptTokenCount 里。
+	// 落到 PromptTokensDetails.CachedTokens 后，types.GetExtraTokens 会把它搬进
+	// ExtraTokens[cached_tokens]，计费时按缓存倍率做差额调整（见 model/price.go）。
+	if geminiUsage.CachedContentTokenCount > 0 {
+		usage.PromptTokensDetails.CachedTokens = geminiUsage.CachedContentTokenCount
+	}
+
 	for _, p := range geminiUsage.PromptTokensDetails {
 		switch p.Modality {
 		case "TEXT":
@@ -1016,9 +1048,13 @@ func ConvertOpenAIUsage(geminiUsage *GeminiUsageMetadata) types.Usage {
 
 // ConvertOpenAIUsageWithFallback 转换 UsageMetadata，如果没有有效的 token 统计则使用图片统计兜底
 func ConvertOpenAIUsageWithFallback(geminiUsage *GeminiUsageMetadata, response *GeminiChatResponse) types.Usage {
-	// 检查是否有有效的 UsageMetadata
+	// 与流式路径 (relay.go hasValidUsage / chat.go HandlerStream) 对齐：
+	// Prompt/Total 可能被中转商裁掉，需要把 Candidates/Thoughts 也纳入判断
 	hasValidUsage := geminiUsage != nil &&
-		(geminiUsage.TotalTokenCount > 0 || geminiUsage.PromptTokenCount > 0)
+		(geminiUsage.TotalTokenCount > 0 ||
+			geminiUsage.PromptTokenCount > 0 ||
+			geminiUsage.CandidatesTokenCount > 0 ||
+			geminiUsage.ThoughtsTokenCount > 0)
 
 	if hasValidUsage {
 		return ConvertOpenAIUsage(geminiUsage)

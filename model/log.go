@@ -23,6 +23,7 @@ type Log struct {
 	TokenName        string                             `json:"token_name" gorm:"index;default:''"`
 	ModelName        string                             `json:"model_name" gorm:"index;index:index_username_model_name,priority:1;default:''"`
 	Quota            int                                `json:"quota" gorm:"default:0"`
+	CostQuota        int                                `json:"cost_quota" gorm:"default:0"`
 	PromptTokens     int                                `json:"prompt_tokens" gorm:"default:0"`
 	CompletionTokens int                                `json:"completion_tokens" gorm:"default:0"`
 	ChannelId        int                                `json:"channel_id" gorm:"index"`
@@ -118,6 +119,7 @@ func RecordConsumeLog(
 	modelName string,
 	tokenName string,
 	quota int,
+	costQuota int,
 	content string,
 	requestTime int,
 	isStream bool,
@@ -141,6 +143,7 @@ func RecordConsumeLog(
 		TokenName:        tokenName,
 		ModelName:        modelName,
 		Quota:            quota,
+		CostQuota:        costQuota,
 		ChannelId:        channelId,
 		RequestTime:      requestTime,
 		IsStream:         isStream,
@@ -151,9 +154,13 @@ func RecordConsumeLog(
 		log.Metadata = datatypes.NewJSONType(metadata)
 	}
 
-	err := DB.Create(log).Error
-	if err != nil {
-		logger.LogError(ctx, "failed to record log: "+err.Error())
+	if config.BatchUpdateEnabled {
+		AddLogToBatch(log)
+	} else {
+		err := DB.Create(log).Error
+		if err != nil {
+			logger.LogError(ctx, "failed to record log: "+err.Error())
+		}
 	}
 }
 
@@ -276,7 +283,7 @@ func GetAllLogsList(params *LogsListParams) ([]*Log, error) {
 func GetUserLogsList(userId int, params *LogsListParams) (*DataResult[Log], error) {
 	var logs []*Log
 
-	tx := DB.Where("user_id = ?", userId).Omit("id")
+	tx := DB.Where("user_id = ?", userId).Omit("id", "cost_quota")
 
 	if params.LogType != LogTypeUnknown {
 		tx = tx.Where("type = ?", params.LogType)
@@ -312,7 +319,7 @@ func GetUserLogsList(userId int, params *LogsListParams) (*DataResult[Log], erro
 func GetAllUserLogsList(userId int, params *LogsListParams) ([]*Log, error) {
 	var logs []*Log
 
-	tx := DB.Where("user_id = ?", userId).Omit("id")
+	tx := DB.Where("user_id = ?", userId).Omit("id", "cost_quota")
 
 	if params.LogType != LogTypeUnknown {
 		tx = tx.Where("type = ?", params.LogType)
@@ -372,30 +379,35 @@ func SearchAllLogs(keyword string) (logs []*Log, err error) {
 }
 
 func SearchUserLogs(userId int, keyword string) (logs []*Log, err error) {
-	err = DB.Where("user_id = ? and type = ?", userId, keyword).Order("id desc").Limit(config.MaxRecentItems).Omit("id").Find(&logs).Error
+	err = DB.Where("user_id = ? and type = ?", userId, keyword).Order("id desc").Limit(config.MaxRecentItems).Omit("id", "cost_quota").Find(&logs).Error
 	return logs, err
 }
 
-func SumUsedQuota(startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int) (quota int) {
+func SumUsedQuota(params *LogsListParams) (quota int) {
 	tx := DB.Table("logs").Select(assembleSumSelectStr("quota"))
-	if username != "" {
-		tx = tx.Where("username = ?", username)
+	if params.Username != "" {
+		tx = tx.Where("username = ?", params.Username)
 	}
-	if tokenName != "" {
-		tx = tx.Where("token_name = ?", tokenName)
+	if params.TokenName != "" {
+		tx = tx.Where("token_name = ?", params.TokenName)
 	}
-	if startTimestamp != 0 {
-		tx = tx.Where("created_at >= ?", startTimestamp)
+	if params.StartTimestamp != 0 {
+		tx = tx.Where("created_at >= ?", params.StartTimestamp)
 	}
-	if endTimestamp != 0 {
-		tx = tx.Where("created_at <= ?", endTimestamp)
+	if params.EndTimestamp != 0 {
+		tx = tx.Where("created_at <= ?", params.EndTimestamp)
 	}
-	if modelName != "" {
-		tx = tx.Where("model_name = ?", modelName)
+	if params.ModelName != "" {
+		tx = tx.Where("model_name = ?", params.ModelName)
 	}
-	if channel != 0 {
-		tx = tx.Where("channel_id = ?", channel)
+	if params.ChannelId != 0 {
+		tx = tx.Where("channel_id = ?", params.ChannelId)
 	}
+	if params.SourceIp != "" {
+		tx = tx.Where("source_ip = ?", params.SourceIp)
+	}
+	// 「总消费」按定义只统计 LogTypeConsume，调用方传入的 params.LogType 在此被有意忽略。
+	// 即便 Tab 切到「全部」（log_type=0）也只汇总消费类型，避免把充值/管理/系统日志的 quota 混进总消费。
 	tx.Where("type = ?", LogTypeConsume).Scan(&quota)
 	return quota
 }
@@ -405,10 +417,28 @@ func DeleteOldLog(targetTimestamp int64) (int64, error) {
 	return result.RowsAffected, result.Error
 }
 
+// DeleteOldLogBatch 分批删除指定时间之前的消费日志，返回本批删除行数。
+// 先查一批 ID 再按 ID 删，避免超大事务锁表。
+func DeleteOldLogBatch(targetTimestamp int64, batchSize int) (int64, error) {
+	var ids []int
+	err := DB.Model(&Log{}).Select("id").
+		Where("type = ? AND created_at < ?", LogTypeConsume, targetTimestamp).
+		Limit(batchSize).Pluck("id", &ids).Error
+	if err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	result := DB.Where("id IN ?", ids).Delete(&Log{})
+	return result.RowsAffected, result.Error
+}
+
 type LogStatistic struct {
 	Date             string `gorm:"column:date"`
 	RequestCount     int64  `gorm:"column:request_count"`
 	Quota            int64  `gorm:"column:quota"`
+	CostQuota        int64  `gorm:"column:cost_quota"`
 	PromptTokens     int64  `gorm:"column:prompt_tokens"`
 	CompletionTokens int64  `gorm:"column:completion_tokens"`
 	RequestTime      int64  `gorm:"column:request_time"`
@@ -428,6 +458,7 @@ type RpmTpmStatistics struct {
 	RPM int64   `json:"rpm"`
 	TPM int64   `json:"tpm"`
 	CPM float64 `json:"cpm"`
+	PPM float64 `json:"ppm"` // Profit Per Minute (美元)：每分钟利润 = (收入 - 成本) / QuotaPerUnit
 }
 
 func GetRpmTpmStatistics() (*RpmTpmStatistics, error) {
@@ -435,6 +466,7 @@ func GetRpmTpmStatistics() (*RpmTpmStatistics, error) {
 		RPM        int64 `gorm:"column:rpm"`
 		TPM        int64 `gorm:"column:tpm"`
 		TotalQuota int64 `gorm:"column:total_quota"`
+		CostQuota  int64 `gorm:"column:cost_quota"`
 	}
 
 	// 获取最近60秒的统计数据
@@ -442,7 +474,7 @@ func GetRpmTpmStatistics() (*RpmTpmStatistics, error) {
 	startTime := now - 60
 
 	err := DB.Table("logs").
-		Select("COUNT(*) as rpm, COALESCE(SUM(prompt_tokens + completion_tokens), 0) as tpm, COALESCE(SUM(quota), 0) as total_quota").
+		Select("COUNT(*) as rpm, COALESCE(SUM(prompt_tokens + completion_tokens), 0) as tpm, COALESCE(SUM(quota), 0) as total_quota, COALESCE(SUM(cost_quota), 0) as cost_quota").
 		Where("type = ? AND created_at >= ?", LogTypeConsume, startTime).
 		Scan(&result).Error
 
@@ -453,10 +485,13 @@ func GetRpmTpmStatistics() (*RpmTpmStatistics, error) {
 	// 计算每分钟消费金额 (美元)
 	// total_quota 是系统内部的配额单位，需要转换为美元
 	cpm := float64(result.TotalQuota) / float64(config.QuotaPerUnit)
+	// 每分钟利润 = (收入 - 成本) / QuotaPerUnit
+	ppm := float64(result.TotalQuota-result.CostQuota) / float64(config.QuotaPerUnit)
 
 	return &RpmTpmStatistics{
 		RPM: result.RPM,
 		TPM: result.TPM,
 		CPM: cpm,
+		PPM: ppm,
 	}, nil
 }

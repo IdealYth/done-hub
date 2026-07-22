@@ -1,6 +1,7 @@
 package types
 
 import (
+	"bytes"
 	"done-hub/common/utils"
 	"encoding/json"
 	"errors"
@@ -248,7 +249,7 @@ func (r *OpenAIResponsesRequest) InputToMessages() ([]ChatCompletionMessage, err
 						Type: "function",
 						Function: &ChatCompletionToolCallsFunction{
 							Name:      item.Name,
-							Arguments: item.Arguments,
+							Arguments: item.ArgumentsString(),
 						},
 					},
 				},
@@ -290,8 +291,8 @@ type InputResponses struct {
 	AcknowledgedSafetyChecks any `json:"acknowledged_safety_checks,omitempty"`
 
 	// function_call
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
 
 	// reasoning
 	Summary          *SummaryResponses `json:"summary,omitempty"`
@@ -432,30 +433,38 @@ type SummaryResponses struct {
 
 type ResponsesTools struct {
 	Type string `json:"type"`
-	// Web Search
+	// Web Search (web_search / web_search_preview) / File Search shared
 	UserLocation      any    `json:"user_location,omitempty"`
 	SearchContextSize string `json:"search_context_size,omitempty"`
+	Filters           any    `json:"filters,omitempty"`
 	// File Search
 	VectorStoreIds []string `json:"vector_store_ids,omitempty"`
 	MaxNumResults  uint     `json:"max_num_results,omitempty"`
-	Filters        any      `json:"filters,omitempty"`
 	RankingOptions any      `json:"ranking_options,omitempty"`
 	// Computer Use
-	DisplayWidth  uint   `json:"display_width,omitempty"`
-	DisplayHeight uint   `json:"display_height,omitempty"`
-	Environment   string `json:"environment,omitempty"`
-	// Function
+	DisplayWidth  uint `json:"display_width,omitempty"`
+	DisplayHeight uint `json:"display_height,omitempty"`
+	// environment 为 string（computer_use 枚举）或 object（shell 工具的 {type, skills...}），故用 any 兼容两种形态
+	Environment any `json:"environment,omitempty"`
+	// Function / Namespace shared
 	Name        string `json:"name,omitempty"`
 	Description string `json:"description,omitempty"`
-	Parameters  any    `json:"parameters,omitempty"`
-	Strict      *bool  `json:"strict,omitempty"`
+	// Function / client-executed tool_search
+	Parameters   any    `json:"parameters,omitempty"`
+	Strict       *bool  `json:"strict,omitempty"`
+	DeferLoading *bool  `json:"defer_loading,omitempty"`
+	Execution    string `json:"execution,omitempty"` // tool_search: "client" or empty(server)
 
-	//MCP
-	ServerLabel     string `json:"server_label,omitempty"`
-	ServerURL       string `json:"server_url,omitempty"`
-	AllowedTools    any    `json:"allowed_tools,omitempty"`
-	Headers         any    `json:"headers,omitempty"`
-	RequireApproval any    `json:"require_approval,omitempty"`
+	// MCP
+	ServerLabel       string `json:"server_label,omitempty"`
+	ServerURL         string `json:"server_url,omitempty"`
+	ServerDescription string `json:"server_description,omitempty"`
+	AllowedTools      any    `json:"allowed_tools,omitempty"`
+	Headers           any    `json:"headers,omitempty"`
+	RequireApproval   any    `json:"require_approval,omitempty"`
+
+	// Namespace / MCP nested tools
+	Tools []ResponsesTools `json:"tools,omitempty"`
 
 	// Code interpreter
 	Container any `json:"container,omitempty"`
@@ -469,6 +478,31 @@ type ResponsesTools struct {
 	PartialImages     any    `json:"partial_images,omitempty"`
 	Quality           string `json:"quality,omitempty"`
 	Size              string `json:"size,omitempty"`
+}
+
+// MarshalJSON strips the description field from server-executed tools.
+// Per OpenAI API spec, description is accepted by:
+//   - "function" and "namespace" types (always)
+//   - "tool_search" type ONLY when execution="client"
+//
+// Server-executed tools (web_search, file_search, hosted tool_search, etc.)
+// do not accept description and upstream APIs will reject it.
+func (t ResponsesTools) MarshalJSON() ([]byte, error) {
+	type Alias ResponsesTools
+	a := (Alias)(t)
+
+	acceptsDesc := false
+	switch t.Type {
+	case "function", "namespace":
+		acceptsDesc = true
+	case "tool_search":
+		acceptsDesc = t.Execution == "client"
+	}
+
+	if !acceptsDesc {
+		a.Description = ""
+	}
+	return json.Marshal(a)
 }
 
 type ReasoningEffort struct {
@@ -558,6 +592,39 @@ func (m ResponsesOutput) GetSummaryString() string {
 	return summary
 }
 
+func (m ResponsesOutput) ArgumentsString() string {
+	return jsonRawMessageToString(m.Arguments)
+}
+
+func (i InputResponses) ArgumentsString() string {
+	return jsonRawMessageToString(i.Arguments)
+}
+
+// jsonRawMessageToString 把 arguments 统一为 Chat 接口期望的字符串形式：
+// 上游按规范返回 JSON 字符串字面量时解码后返回；返回 object/array 等其他类型时原样返回字面量。
+func jsonRawMessageToString(data json.RawMessage) string {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return ""
+	}
+	if trimmed[0] != '"' {
+		return string(trimmed)
+	}
+	var value string
+	if err := json.Unmarshal(trimmed, &value); err != nil {
+		return string(trimmed)
+	}
+	return value
+}
+
+// ArgumentsFromString 把 Chat 形式的字符串 arguments 编码为 json.RawMessage。
+// 空字符串编码为 JSON 字面量 ""，对齐 *string 时代非 nil 指针的序列化行为，
+// 避免 added/done 事件在空参数时整字段省略。
+func ArgumentsFromString(s string) json.RawMessage {
+	b, _ := json.Marshal(s)
+	return b
+}
+
 type IncompleteDetail struct {
 	Reason string `json:"reason,omitempty"`
 }
@@ -571,7 +638,7 @@ type ResponsesOutput struct {
 
 	Queries             any                `json:"queries,omitempty"`
 	Results             any                `json:"results,omitempty"`
-	Arguments           *string            `json:"arguments,omitempty"`
+	Arguments           json.RawMessage    `json:"arguments,omitempty"`
 	CallID              string             `json:"call_id,omitempty"`
 	Name                string             `json:"name,omitempty"`
 	Action              any                `json:"action,omitempty"`
@@ -774,7 +841,7 @@ func (cc *ChatCompletionResponse) ToResponses(request *OpenAIResponsesRequest) *
 					Status:    ResponseStatusCompleted,
 					CallID:    tool.Id,
 					Name:      tool.Function.Name,
-					Arguments: &tool.Function.Arguments,
+					Arguments: ArgumentsFromString(tool.Function.Arguments),
 				})
 			}
 		} else {
@@ -863,16 +930,12 @@ func (r *OpenAIResponsesResponses) ToChat() *ChatCompletionResponse {
 			if choice.Message.ToolCalls == nil {
 				choice.Message.ToolCalls = make([]*ChatCompletionToolCalls, 0)
 			}
-			arguments := ""
-			if output.Arguments != nil {
-				arguments = *output.Arguments
-			}
 			choice.Message.ToolCalls = append(choice.Message.ToolCalls, &ChatCompletionToolCalls{
 				Id:   output.CallID,
 				Type: "function",
 				Function: &ChatCompletionToolCallsFunction{
 					Name:      output.Name,
-					Arguments: arguments,
+					Arguments: output.ArgumentsString(),
 				},
 			})
 			choice.FinishReason = FinishReasonToolCalls

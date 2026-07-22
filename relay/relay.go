@@ -16,6 +16,7 @@ import (
 func RelayOnly(c *gin.Context) {
 	provider, _, fail := GetProvider(c, "")
 	if fail != nil {
+		// /files、/batches 等端点本身没有 model 字段（传入 modelName 始终为空），不接 model_not_found 分支。
 		common.AbortWithMessage(c, http.StatusServiceUnavailable, fail.Error())
 		return
 	}
@@ -83,6 +84,6 @@ func RelayOnly(c *gin.Context) {
 			requestTime = int(time.Since(requestStartTime).Milliseconds())
 		}
 	}
-	model.RecordConsumeLog(c.Request.Context(), c.GetInt("id"), c.GetInt("channel_id"), 0, 0, "", c.GetString("token_name"), 0, "中继:"+path, requestTime, false, nil, c.ClientIP())
+	model.RecordConsumeLog(c.Request.Context(), c.GetInt("id"), c.GetInt("channel_id"), 0, 0, "", c.GetString("token_name"), 0, 0, "中继:"+path, requestTime, false, nil, c.ClientIP())
 
 }
